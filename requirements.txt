@@ -1,0 +1,6 @@
+facexlib==0.3.0
+numpy
+opencv-python
+pytest
+torch
+torchvision
