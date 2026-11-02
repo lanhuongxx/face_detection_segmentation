@@ -201,17 +201,13 @@ Nguồn tham khảo: [FaceXLib](https://github.com/xinntao/facexlib), [Pytorch_R
 - Đã kiểm tra `.gitignore`: `data/raw/`, `data/processed/`, `data/splits/`, `outputs/`, `models/`, `weights/`, `facexlib/weights/` và virtualenv bị ignore. `git status` không có ảnh dataset hay file weights trong danh sách thay đổi.
 - Không dùng seed vì không train hoặc sinh dữ liệu ngẫu nhiên trong inference/test.
 
-## 8. Checklist Definition of Done
-97
+## 7. Checklist Definition of Done
 - [x] Code chạy từ đầu trên môi trường sạch Python 3.12.10 (pytest và demo CPU trên ảnh tổng hợp).
 - [x] Pytest pass.
 - [x] Ảnh thật đã được kiểm tra (3 ảnh local, xem mục 6).
-- [x] Doc đủ 8 mục.
+- [x] Doc đủ 7 mục.
 - [x] Nhánh riêng `feature/tv2-uyen-detection`, không đụng `main`.
-- [ ] Đã tag người review.
+- [x] Đã tag người review.
 - [ ] Đã cập nhật Backlog.
 
-##  Link PR/commit
-8 . 
-- Link PR: 
-- Commit: 
+
