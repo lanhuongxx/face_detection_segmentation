@@ -1,6 +1,7 @@
 facexlib==0.3.0
 numpy
-opencv-python
+opencv-python>=4.8,<5
+PyYAML>=6,<7
 pytest
 torch
 torchvision
