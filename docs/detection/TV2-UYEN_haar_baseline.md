@@ -113,7 +113,7 @@ Cài dependencies bằng đúng Python interpreter dùng để chạy:
 python -m pip install -r requirements.txt
 ```
 
-`opencv-python<5` giới hạn dependency trong major 4; repo hiện chưa ghi lý do tương thích cụ thể, nên cần hỏi người thêm pin và chạy test với OpenCV 5 để xác nhận trước khi nới giới hạn.
+Theo kiểm tra của người review, `requirements.txt` ghim `opencv-python>=4.8,<5`. Lý do: với OpenCV 5.0.0, module `cv2` không có `CascadeClassifier`, nên `HaarFaceDetector` và 2 test Haar bị lỗi `AttributeError`; với OpenCV 4.14.0 các test Haar pass. Chỉ nới giới hạn khi OpenCV 5 có lại API tương đương.
 
 Chạy Haar và RetinaFace trên cùng manifest/split:
 
