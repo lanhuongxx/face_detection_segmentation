@@ -40,7 +40,9 @@ def load_manifest(
     seen_ids: set[str] = set()
     with path.open("r", encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file)
-        headers = set(reader.fieldnames or [])
+        # Không phân biệt hoa/thường để đọc được manifest của Tuấn (Image_Path, Split)
+        lookup = {n.strip().lower(): n for n in (reader.fieldnames or [])}
+        headers = set(lookup)
         missing = {"image_path", "split"} - headers
         if missing:
             raise ValueError(
@@ -48,8 +50,8 @@ def load_manifest(
             )
 
         for line_number, row in enumerate(reader, start=2):
-            image_id = (row.get("image_path") or "").strip()
-            row_split = (row.get("split") or "").strip()
+            image_id = (row.get(lookup.get("image_path", "")) or "").strip()
+            row_split = (row.get(lookup.get("split", "")) or "").strip()
             if not image_id or not row_split:
                 raise ValueError(
                     f"Manifest có image_path/split rỗng tại dòng {line_number}."
@@ -108,14 +110,20 @@ def run_detection(
     output_path: str | Path,
     config_path: str | Path = _DEFAULT_CONFIG,
     split: str | None = None,
+    conf_thres: float | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Chạy detector cho manifest rồi ghi bbox/score theo image_path."""
     rows = load_manifest(manifest_path, split=split)
     config = load_config(config_path)
+    if conf_thres is not None and detector_name == "retinaface":
+        # Tính AP cần giữ gần hết box nên chạy với conf_thres thấp (0.01)
+        config.setdefault("retinaface", {})["conf_thres"] = conf_thres
     detector = create_detector(detector_name, config)
     predictions: dict[str, list[dict[str, Any]]] = {}
 
-    for image_id, image_path in rows:
+    for n, (image_id, image_path) in enumerate(rows, start=1):
+        if n % 100 == 0:
+            print(f"  {n}/{len(rows)} ảnh", file=sys.stderr, flush=True)
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if image is None:
             if not image_path.is_file():
@@ -163,6 +171,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Chỉ chạy split này; mặc định dùng mọi dòng trong manifest.",
     )
+    parser.add_argument(
+        "--conf-thres",
+        type=float,
+        default=None,
+        help="Ghi đè conf_thres của RetinaFace (tính AP dùng 0.01).",
+    )
     args = parser.parse_args(argv)
     predictions = run_detection(
         detector_name=args.detector,
@@ -170,6 +184,7 @@ def main(argv: list[str] | None = None) -> None:
         output_path=args.out,
         config_path=args.config,
         split=args.split,
+        conf_thres=args.conf_thres,
     )
     print(
         f"Đã xử lý {len(predictions)} ảnh bằng {args.detector}; "
