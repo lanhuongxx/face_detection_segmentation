@@ -8,7 +8,7 @@ venv/
 # Datasets
 data/raw/
 data/processed/
-data/splits/
+# data/splits/ <sẽ có train.csv, val.csv, test.csv>
 
 # Model weights
 *.pth

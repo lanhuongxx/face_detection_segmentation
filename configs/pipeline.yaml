@@ -1,0 +1,25 @@
+# Cấu hình inference. Mục nào không ghi sẽ dùng giá trị mặc định trong src/utils/config.py
+device: auto            # auto | cuda | cpu
+preprocess:
+  max_side: 4096
+  max_file_mb: 10
+detection:
+  model: retinaface_mobile0.25     # hoặc retinaface_resnet50 (nặng hơn, tốt hơn cho mặt nhỏ)
+  conf_threshold: 0.5              # thấp hơn nếu ưu tiên không bỏ sót mặt
+  max_faces: 200
+crop:
+  margin: 0.25
+  size: 256
+  min_face_px: 20
+segmentation:
+  weights: models/unet_best.pt
+  mask_threshold: 0.5
+  min_mask_ratio: 0.30
+  batch_size: 16
+privacy:
+  mode: blur
+  strength: 6
+  region: mask
+  dilate_px: 4
+  feather_px: 3
+  solid_color: [30, 30, 30]
