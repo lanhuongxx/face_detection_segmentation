@@ -1,2 +1,5 @@
 numpy
 Pillow
+opencv-python
+matplotlib
+pytest
