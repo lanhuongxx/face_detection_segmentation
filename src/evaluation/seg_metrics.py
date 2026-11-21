@@ -1,4 +1,9 @@
-"""Tính các metric segmentation nhị phân cho mảng NumPy và tensor PyTorch."""
+"""Các hàm tính metric segmentation (Dice, IoU, precision, recall) cho mask nhị phân.
+
+Dùng được cho cả mảng NumPy lẫn tensor PyTorch, nên có thể gọi lúc validate trong
+lúc train hoặc lúc đánh giá offline. Mask đầu vào có shape (H, W) cho một ảnh
+hoặc (N, 1, H, W) cho một batch.
+"""
 
 from __future__ import annotations
 
@@ -8,30 +13,36 @@ import numpy as np
 
 try:
     import torch
-except ImportError:  # Cho phép dùng NumPy mà không bắt buộc cài PyTorch.
+except ImportError:  # máy nào chưa cài torch thì vẫn dùng được bản NumPy
     torch = None
 
-# Ba cách tổng hợp: theo từng ảnh, trung bình macro, hoặc gộp pixel kiểu micro.
+# Ba cách gộp kết quả:
+# - per_image: giữ riêng từng ảnh
+# - mean: trung bình điểm của các ảnh (macro)
+# - global: cộng TP/FP/FN của cả tập rồi mới tính điểm (micro)
 Reduction = Literal["per_image", "mean", "global"]
 _Array = Any
 
 
 def _is_tensor(value: Any) -> bool:
-    """Kiểm tra kiểu Tensor, đồng thời an toàn khi PyTorch chưa được cài."""
+    """Kiểm tra có phải torch.Tensor không (trả False luôn nếu chưa cài torch)."""
     return torch is not None and isinstance(value, torch.Tensor)
 
 
 def _prepare_pair(pred: _Array, gt: _Array) -> tuple[_Array, _Array, bool]:
-    """Kiểm tra shape/device, chuẩn hóa batch và chuyển cả hai mask thành bool."""
+    """Kiểm tra hai mask hợp lệ, đưa về dạng batch (N, H, W) và đổi sang bool.
+
+    Trả thêm một cờ cho biết đang dùng torch hay numpy để các hàm sau chọn đúng nhánh.
+    """
     use_torch = _is_tensor(pred) or _is_tensor(gt)
 
     if use_torch:
-        # Nếu một đầu vào là Tensor thì đưa đầu vào còn lại lên cùng device.
+        # chỉ cần một trong hai là tensor thì ép cả hai thành tensor trên cùng device
         tensors = [value for value in (pred, gt) if _is_tensor(value)]
         device = tensors[0].device
         if any(value.device != device for value in tensors[1:]):
             raise ValueError("pred and gt tensors must be on the same device")
-        # detach để metric trong validation không giữ lại computation graph.
+        # detach để tính metric lúc validate không kéo theo graph của autograd
         pred_array = torch.as_tensor(pred, device=device).detach()
         gt_array = torch.as_tensor(gt, device=device).detach()
     else:
@@ -46,13 +57,13 @@ def _prepare_pair(pred: _Array, gt: _Array) -> tuple[_Array, _Array, bool]:
 
     shape = tuple(pred_array.shape)
     if len(shape) == 2:
-        # Đưa một ảnh về batch size 1 để phần tính metric dùng chung với batch.
+        # một ảnh lẻ (H, W): thêm trục batch để dùng chung code với trường hợp nhiều ảnh
         if shape[0] == 0 or shape[1] == 0:
             raise ValueError("each mask must contain at least one pixel")
         pred_array = pred_array[None, ...]
         gt_array = gt_array[None, ...]
     elif len(shape) == 4 and shape[1] == 1:
-        # Bỏ trục channel đơn; mỗi phần tử còn lại có shape (H, W).
+        # batch dạng (N, 1, H, W): bỏ trục channel (luôn bằng 1) để còn (N, H, W)
         if shape[0] == 0 or shape[2] == 0 or shape[3] == 0:
             raise ValueError("batch masks must contain images with at least one pixel")
         pred_array = pred_array[:, 0, ...]
@@ -69,10 +80,10 @@ def _prepare_pair(pred: _Array, gt: _Array) -> tuple[_Array, _Array, bool]:
 
 
 def _binarize(mask: _Array) -> _Array:
-    """Nhị phân hóa xác suất bằng 0.5 và mask 0/255 bằng 127."""
+    """Đổi mask về bool: xác suất (0..1) lấy ngưỡng 0.5, mask ảnh (0/255) lấy ngưỡng 127."""
     if torch is not None and isinstance(mask, torch.Tensor):
         if mask.dtype == torch.bool:
-            # Bool đã biểu diễn mask nhị phân nên không cần áp dụng ngưỡng.
+            # đã là bool thì không cần so ngưỡng nữa
             return mask
         if not (
             torch.is_floating_point(mask)
@@ -80,17 +91,18 @@ def _binarize(mask: _Array) -> _Array:
             in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64)
         ):
             raise ValueError(f"mask dtype must be numeric or bool, got {mask.dtype}")
-        # NaN/Inf làm cho kết quả so sánh và metric không có ý nghĩa.
+        # NaN hoặc Inf thì so ngưỡng ra kết quả vô nghĩa, báo lỗi luôn cho dễ tìm
         if not bool(torch.isfinite(mask).all().item()):
             raise ValueError("masks must contain only finite values")
         if torch.is_floating_point(mask) and mask.numel() and bool(
             (mask.min() < 0).item()
         ):
+            # giá trị âm gần như chắc chắn là logit chưa qua sigmoid
             raise ValueError(
                 "float mask has negative values; looks like logits, apply sigmoid first"
             )
-        # Dữ liệu trong [0, 1] được hiểu là xác suất; dải lớn hơn dùng ngưỡng 127
-        # để nhận diện mask ảnh thường mã hóa foreground là 255.
+        # nếu giá trị nằm trong [0, 1] thì coi là xác suất (ngưỡng 0.5),
+        # còn lớn hơn 1 thì coi là mask ảnh 0/255 (ngưỡng 127)
         threshold = (
             0.5
             if mask.numel() == 0 or bool(mask.max().item() <= 1)
@@ -110,27 +122,27 @@ def _binarize(mask: _Array) -> _Array:
         raise ValueError(
             "float mask has negative values; looks like logits, apply sigmoid first"
         )
-    # Giữ cùng quy tắc ngưỡng với nhánh PyTorch.
+    # nhánh NumPy dùng đúng quy tắc ngưỡng như nhánh torch ở trên
     threshold = 0.5 if mask.size == 0 or np.max(mask) <= 1 else 127
     return mask > threshold
 
 
 def _counts(pred: _Array, gt: _Array, use_torch: bool) -> tuple[_Array, ...]:
-    """Đếm TP/FP/FN/TN theo từng ảnh; mỗi mask đã được chuẩn hóa thành bool."""
+    """Đếm TP, FP, FN, TN riêng cho từng ảnh trong batch (hai mask đã là bool)."""
     if use_torch:
         dims = (1, 2)
-        # TP là phần giao; diện tích từng mask giúp suy ra FP và FN.
+        # TP = pixel cả hai cùng bằng 1. FP và FN suy ra từ diện tích mỗi mask trừ đi TP
         tp = (pred & gt).sum(dim=dims, dtype=torch.int64)
         pred_area = pred.sum(dim=dims, dtype=torch.int64)
         gt_area = gt.sum(dim=dims, dtype=torch.int64)
         fp = pred_area - tp
         fn = gt_area - tp
-        # TN là các pixel còn lại ngoài TP, FP và FN.
+        # TN là phần còn lại của ảnh sau khi trừ TP, FP, FN
         total = pred.shape[1] * pred.shape[2]
         tn = total - tp - fp - fn
     else:
         dims = (1, 2)
-        # Nhánh NumPy dùng cùng công thức; axis (1, 2) là H và W.
+        # nhánh NumPy tính y hệt, axis 1 và 2 là chiều cao và chiều rộng
         tp = np.count_nonzero(pred & gt, axis=dims)
         pred_area = np.count_nonzero(pred, axis=dims)
         gt_area = np.count_nonzero(gt, axis=dims)
@@ -142,14 +154,14 @@ def _counts(pred: _Array, gt: _Array, use_torch: bool) -> tuple[_Array, ...]:
 
 
 def _reduce(value: _Array, reduction: Reduction, use_torch: bool) -> _Array:
-    """Tổng hợp mảng giá trị theo từng ảnh, trung bình hoặc phép cộng."""
+    """Gộp một mảng giá trị theo kiểu reduction đã chọn."""
     if reduction == "per_image":
         return value
     if reduction == "mean":
-        # Chuyển count sang float trước khi lấy trung bình.
+        # đổi sang float trước, vì mảng đếm là số nguyên nên mean thẳng sẽ bị cụt
         return value.to(torch.float64).mean() if use_torch else value.mean()
     if reduction == "global":
-        # Chỉ dùng cộng trực tiếp khi caller yêu cầu tổng số đếm.
+        # với số đếm thì gộp toàn cục chính là cộng lại
         return value.sum()
     raise ValueError(
         "reduction must be 'per_image', 'mean', or 'global'; "
@@ -160,16 +172,17 @@ def _reduce(value: _Array, reduction: Reduction, use_torch: bool) -> _Array:
 def _reduce_counts(
     counts: tuple[_Array, ...], reduction: Reduction, use_torch: bool
 ) -> tuple[_Array, ...]:
-    """Áp dụng reduction trực tiếp lên từng loại confusion count."""
+    """Áp dụng reduction lên từng loại số đếm TP, FP, FN, TN."""
     return tuple(_reduce(count, reduction, use_torch) for count in counts)
 
 
 def _metric_counts(
     counts: tuple[_Array, ...], reduction: Reduction
 ) -> tuple[_Array, ...]:
-    """Chọn count đầu vào cho metric, gộp count trước khi tính ở chế độ micro."""
+    """Chọn số đếm để đưa vào công thức metric (với global thì cộng dồn trước)."""
     if reduction == "global":
-        # Micro phải tính tỉ lệ từ tổng TP/FP/FN, không lấy tổng các score từng ảnh.
+        # micro: phải cộng TP/FP/FN của cả tập rồi mới chia,
+        # không được cộng điểm Dice của từng ảnh
         return tuple(count.sum() for count in counts)
     if reduction not in ("per_image", "mean"):
         raise ValueError(
@@ -180,7 +193,7 @@ def _metric_counts(
 
 
 def _reduce_metric(value: _Array, reduction: Reduction, use_torch: bool) -> _Array:
-    """Metric đã tính theo ảnh chỉ cần lấy mean khi yêu cầu macro."""
+    """Điểm đã tính theo từng ảnh, chỉ cần lấy trung bình nếu chọn mean."""
     return _reduce(value, "mean", use_torch) if reduction == "mean" else value
 
 
@@ -190,11 +203,11 @@ def _ratio(
     zero_value: float,
     use_torch: bool,
 ) -> _Array:
-    """Chia an toàn: thay mẫu số 0 bằng giá trị quy ước của từng metric."""
+    """Chia an toàn: chỗ nào mẫu số bằng 0 thì trả zero_value thay vì lỗi chia cho 0."""
     if use_torch:
         numerator = numerator.to(torch.float64)
         denominator = denominator.to(torch.float64)
-        # clamp tránh tạo phép chia cho 0; torch.where chọn giá trị dự phòng.
+        # clamp để phép chia không bao giờ chia cho 0, rồi torch.where chọn lại giá trị đúng
         safe_denominator = denominator.clamp(min=1)
         fallback = torch.full_like(numerator, zero_value)
         return torch.where(denominator > 0, numerator / safe_denominator, fallback)
@@ -205,7 +218,7 @@ def _ratio(
         zero_value,
         dtype=np.float64,
     )
-    # Chỉ chia tại vị trí mẫu số dương; các vị trí còn lại giữ zero_value.
+    # chỉ chia ở những chỗ mẫu số > 0, các chỗ còn lại giữ nguyên zero_value
     np.divide(numerator, denominator, out=result, where=denominator > 0)
     return result
 
@@ -215,9 +228,9 @@ def confusion_counts(
     gt: _Array,
     reduction: Reduction = "per_image",
 ) -> tuple[_Array, _Array, _Array, _Array]:
-    """Trả (TP, FP, FN, TN), mặc định là các count riêng cho từng ảnh."""
+    """Trả về (TP, FP, FN, TN). Mặc định là số đếm riêng của từng ảnh."""
     pred_binary, gt_binary, use_torch = _prepare_pair(pred, gt)
-    # Khác với metric, confusion count có thể được cộng trực tiếp ở reduction global.
+    # với số đếm thì global cộng thẳng được, khác với metric (xem _metric_counts)
     return _reduce_counts(
         _counts(pred_binary, gt_binary, use_torch), reduction, use_torch
     )
@@ -228,9 +241,9 @@ def dice_score(
     gt: _Array,
     reduction: Reduction = "mean",
 ) -> _Array:
-    """Tính Dice = 2TP/(2TP+FP+FN); hai mask rỗng được quy ước bằng 1."""
+    """Dice = 2TP / (2TP + FP + FN). Hai mask cùng rỗng thì quy ước Dice = 1."""
     pred_binary, gt_binary, use_torch = _prepare_pair(pred, gt)
-    # Với global, gộp count trước rồi mới tính Dice micro.
+    # nếu là global thì gộp số đếm trước, sau đó mới tính ra Dice micro
     tp, fp, fn, _ = _metric_counts(
         _counts(pred_binary, gt_binary, use_torch), reduction
     )
@@ -245,7 +258,7 @@ def iou_score(
     gt: _Array,
     reduction: Reduction = "mean",
 ) -> _Array:
-    """Tính IoU = TP/(TP+FP+FN); hai mask rỗng được quy ước bằng 1."""
+    """IoU = TP / (TP + FP + FN). Hai mask cùng rỗng thì quy ước IoU = 1."""
     pred_binary, gt_binary, use_torch = _prepare_pair(pred, gt)
     tp, fp, fn, _ = _metric_counts(
         _counts(pred_binary, gt_binary, use_torch), reduction
@@ -259,12 +272,18 @@ def pixel_precision_recall(
     gt: _Array,
     reduction: Reduction = "mean",
 ) -> tuple[_Array, _Array]:
-    """Trả (pixel precision, pixel recall); mẫu số 0: bằng 1 khi cả hai mask rỗng, ngược lại bằng 0."""
+    """Trả về (precision, recall) tính theo pixel.
+
+    Nếu mẫu số bằng 0 thì trả 1 khi cả hai mask đều rỗng, còn lại trả 0.
+    """
     pred_binary, gt_binary, use_torch = _prepare_pair(pred, gt)
     tp, fp, fn, _ = _metric_counts(
         _counts(pred_binary, gt_binary, use_torch), reduction
     )
-    # Precision đo độ chính xác của pixel dự đoán dương; recall đo độ phủ GT.
+    # precision: trong số pixel model tô, bao nhiêu phần đúng.
+    # recall: trong số pixel GT, model tô được bao nhiêu phần.
+    # both_empty bằng 1 khi cả hai mask đều rỗng (tp + fp + fn = 0), còn lại bằng 0,
+    # cộng vào để trường hợp rỗng cả hai được tính là 1 thay vì 0
     both_empty = _ratio(tp * 0, tp + fp + fn, 1.0, use_torch)
     precision = _ratio(tp, tp + fp, 0.0, use_torch) + both_empty
     recall = _ratio(tp, tp + fn, 0.0, use_torch) + both_empty

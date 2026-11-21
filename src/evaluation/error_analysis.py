@@ -1,15 +1,15 @@
-"""Phân tích lỗi segmentation: ví dụ TP/FP/FN và ảnh hưởng của điều kiện ảnh.
+"""Phân tích lỗi segmentation: xem ví dụ TP/FP/FN và điều kiện ảnh nào làm model tệ đi.
 
-Đầu vào là CSV theo ảnh do ``evaluate.py`` tạo, cùng thư mục ảnh, mask GT và mask
-dự đoán. Chỉ số điều kiện ảnh được tính trực tiếp từ ảnh nên không cần nhãn thêm:
+Đầu vào là CSV theo ảnh do ``evaluate.py`` tạo, cùng thư mục ảnh gốc, mask GT và mask dự đoán.
+Các chỉ số điều kiện ảnh được tính thẳng từ ảnh nên không cần gán nhãn thêm:
 
-- ``brightness``: độ sáng trung bình (0-255); thấp = ảnh tối.
-- ``sharpness``: phương sai Laplacian; thấp = ảnh mờ (so sánh trên cùng kích thước ảnh).
-- ``contrast``: độ lệch chuẩn mức xám.
-- ``face_ratio``: diện tích mask GT / diện tích ảnh; thấp = mặt nhỏ trong khung.
+- ``brightness``: độ sáng trung bình (0-255), thấp nghĩa là ảnh tối.
+- ``sharpness``: phương sai Laplacian, thấp nghĩa là ảnh mờ (chỉ so sánh được khi cùng kích thước ảnh).
+- ``contrast``: độ lệch chuẩn của mức xám.
+- ``face_ratio``: diện tích mask GT chia diện tích ảnh, thấp nghĩa là mặt nhỏ trong khung.
 
-Mỗi điều kiện chia thành 3 nhóm low/mid/high theo tertile của chính tập đánh giá
-(ngưỡng được ghi vào CSV), không dùng ngưỡng cố định tự đặt.
+Mỗi điều kiện được chia thành 3 nhóm low/mid/high theo tertile (chia ba theo phân vị) của chính
+tập đang đánh giá. Ngưỡng chia được ghi vào CSV, không tự đặt một ngưỡng cố định.
 """
 
 from __future__ import annotations
@@ -27,13 +27,16 @@ from .seg_metrics import _binarize
 
 _IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
 CONDITIONS = ("brightness", "sharpness", "contrast", "face_ratio")
+# màu phủ lên ảnh: TP xanh lá, FP đỏ, FN xanh dương
 _COLORS = {"tp": (0, 200, 0), "fp": (230, 30, 30), "fn": (40, 90, 255)}
+# cạnh (pixel) của mỗi ô trong ảnh ví dụ
 _PANEL = 256
 
 
 def find_image(image_dir: Path, image_id: str) -> Path:
-    """Tìm ảnh gốc theo image_id (không phần mở rộng, có thể có thư mục con)."""
-    # CelebA-HQ đặt tên ảnh "0.jpg" còn mask/CSV dùng "00000": thử thêm tên bỏ số 0 đầu.
+    """Tìm ảnh gốc theo image_id (id không có đuôi file, ảnh có thể nằm trong thư mục con)."""
+    # CelebA-HQ đặt tên ảnh là "0.jpg" còn mask và CSV dùng "00000",
+    # nên thử thêm cả tên đã bỏ các số 0 đứng đầu
     names = [image_id]
     if image_id.isdigit() and str(int(image_id)) != image_id:
         names.append(str(int(image_id)))
@@ -46,6 +49,7 @@ def find_image(image_dir: Path, image_id: str) -> Path:
 
 
 def _find_mask(directory: Path, image_id: str) -> Path:
+    """Tìm file mask của một id trong thư mục, thử lần lượt các đuôi file thường gặp."""
     for suffix in (".png", ".bmp", ".jpg", ".jpeg", ".tif", ".tiff", ".npy"):
         candidate = directory / f"{image_id}{suffix}"
         if candidate.is_file():
@@ -54,10 +58,12 @@ def _find_mask(directory: Path, image_id: str) -> Path:
 
 
 def laplacian_variance(gray: np.ndarray) -> float:
-    """Phương sai Laplacian 4 láng giềng bằng NumPy (không cần OpenCV)."""
+    """Phương sai của Laplacian (4 láng giềng), dùng làm độ nét. Tự tính bằng NumPy cho khỏi cần OpenCV."""
     g = gray.astype(np.float64)
+    # ảnh nhỏ hơn 3x3 thì không có pixel nào đủ láng giềng để tính
     if g.shape[0] < 3 or g.shape[1] < 3:
         return 0.0
+    # Laplacian = tổng 4 pixel xung quanh trừ 4 lần pixel giữa, chỉ tính cho phần lõi ảnh
     lap = (
         -4.0 * g[1:-1, 1:-1]
         + g[:-2, 1:-1] + g[2:, 1:-1] + g[1:-1, :-2] + g[1:-1, 2:]
@@ -66,7 +72,8 @@ def laplacian_variance(gray: np.ndarray) -> float:
 
 
 def image_conditions(image_rgb: np.ndarray, gt_mask: np.ndarray) -> dict[str, float]:
-    """Tính 4 chỉ số điều kiện ảnh cho một ảnh và mask GT bool."""
+    """Tính 4 chỉ số điều kiện (sáng, nét, tương phản, tỉ lệ mặt) cho một ảnh và mask GT bool."""
+    # đổi RGB sang xám theo công thức chuẩn 0.299 R + 0.587 G + 0.114 B
     gray = (
         image_rgb[..., 0] * 0.299 + image_rgb[..., 1] * 0.587 + image_rgb[..., 2] * 0.114
     )
@@ -81,15 +88,17 @@ def image_conditions(image_rgb: np.ndarray, gt_mask: np.ndarray) -> dict[str, fl
 def error_overlay(
     image_rgb: np.ndarray, gt: np.ndarray, pred: np.ndarray, alpha: float = 0.55
 ) -> np.ndarray:
-    """Phủ màu: TP xanh lá, FP đỏ (tô thừa), FN xanh dương (bỏ sót)."""
+    """Phủ màu lên ảnh: TP xanh lá, FP đỏ (model tô thừa), FN xanh dương (model bỏ sót)."""
     out = image_rgb.astype(np.float32).copy()
     for key, region in (("tp", gt & pred), ("fp", pred & ~gt), ("fn", gt & ~pred)):
         color = np.asarray(_COLORS[key], dtype=np.float32)
+        # trộn màu với ảnh gốc theo alpha để vẫn nhìn thấy nội dung ảnh bên dưới
         out[region] = (1 - alpha) * out[region] + alpha * color
     return out.clip(0, 255).astype(np.uint8)
 
 
 def _panel(array: np.ndarray, label: str) -> Image.Image:
+    """Đổi mảng thành một ô ảnh vuông _PANEL x _PANEL, ghi chữ nhãn ở góc trên bên trái."""
     image = Image.fromarray(array).convert("RGB").resize((_PANEL, _PANEL))
     ImageDraw.Draw(image).text((4, 4), label, fill=(255, 255, 0))
     return image
@@ -98,7 +107,7 @@ def _panel(array: np.ndarray, label: str) -> Image.Image:
 def make_example_sheet(
     rows: Sequence[dict], image_dir: Path, gt_dir: Path, pred_dir: Path, path: Path
 ) -> None:
-    """Mỗi hàng: ảnh | GT | dự đoán | lỗi (xanh lá TP, đỏ FP, xanh dương FN)."""
+    """Ghép các ảnh ví dụ thành một tấm. Mỗi hàng gồm: ảnh | GT | dự đoán | lỗi (TP xanh lá, FP đỏ, FN xanh dương)."""
     if not rows:
         return
     sheet = Image.new("RGB", (_PANEL * 4, _PANEL * len(rows)), "white")
@@ -107,6 +116,7 @@ def make_example_sheet(
         image = np.asarray(Image.open(find_image(image_dir, image_id)).convert("RGB"))
         gt = _binarize(_load_mask(_find_mask(gt_dir, image_id)))
         pred = _binarize(_load_mask(_find_mask(pred_dir, image_id)))
+        # mask bool (True/False) nhân 255 và nhân ra 3 kênh để hiển thị như ảnh xám
         panels = (
             _panel(image, f"{image_id}"),
             _panel(np.repeat((gt * 255).astype(np.uint8)[..., None], 3, 2), "GT"),
@@ -121,7 +131,7 @@ def make_example_sheet(
 
 
 def tertile_groups(values: np.ndarray) -> tuple[np.ndarray, tuple[float, float]]:
-    """Gán 0/1/2 (low/mid/high) theo tertile; trả nhãn và hai ngưỡng."""
+    """Chia thành 3 nhóm 0/1/2 (low/mid/high) theo tertile, trả về nhãn từng phần tử và hai ngưỡng."""
     low, high = np.quantile(values, [1 / 3, 2 / 3])
     labels = np.where(values <= low, 0, np.where(values <= high, 1, 2))
     return labels, (float(low), float(high))
@@ -135,16 +145,17 @@ def analyze(
     out_dir: Path,
     k: int = 6,
 ) -> dict:
-    """Chạy toàn bộ phân tích, ghi CSV/PNG vào out_dir và trả tóm tắt."""
+    """Chạy toàn bộ phân tích, ghi CSV và ảnh PNG vào out_dir rồi trả về một dict tóm tắt."""
     with metrics_csv.open(newline="", encoding="utf-8-sig") as file:
         rows = list(csv.DictReader(file))
     if not rows:
         raise ValueError(f"CSV không có dòng nào: {metrics_csv}")
+    # csv.DictReader đọc mọi thứ ra chuỗi nên đổi các cột số về float
     for row in rows:
         for key in ("dice", "iou", "precision", "recall", "area_gt", "area_pred"):
             row[key] = float(row[key])
 
-    # 1. Điều kiện từng ảnh.
+    # bước 1: tính điều kiện ảnh (sáng, nét, tương phản, tỉ lệ mặt) cho từng ảnh
     for row in rows:
         image = np.asarray(Image.open(find_image(image_dir, row["image_id"])).convert("RGB"))
         gt = _binarize(_load_mask(_find_mask(gt_dir, row["image_id"])))
@@ -158,7 +169,7 @@ def analyze(
         writer.writeheader()
         writer.writerows({k_: row[k_] for k_ in fields} for row in rows)
 
-    # 2. Dice/IoU theo nhóm điều kiện.
+    # bước 2: với mỗi điều kiện, chia ảnh thành 3 nhóm rồi xem Dice, IoU... của từng nhóm
     dice = np.array([r["dice"] for r in rows])
     iou = np.array([r["iou"] for r in rows])
     prec = np.array([r["precision"] for r in rows])
@@ -170,6 +181,7 @@ def analyze(
         labels, (lo, hi) = tertile_groups(values)
         for index, name in enumerate(group_names):
             selected = labels == index
+            # nhóm nào trống (ví dụ nhiều giá trị trùng nhau làm tertile dồn lại) thì bỏ qua
             if not selected.any():
                 continue
             table.append(
@@ -189,10 +201,11 @@ def analyze(
         writer.writeheader()
         writer.writerows(table)
 
-    # 3. Ví dụ tệ nhất / trung vị / tốt nhất.
+    # bước 3: chọn k ảnh tệ nhất, k ảnh ở giữa (quanh trung vị) và k ảnh tốt nhất theo Dice
     k = max(1, min(k, len(rows)))
     order = sorted(rows, key=lambda r: r["dice"])
     mid = len(order) // 2
+    # lấy k ảnh quanh vị trí giữa, kẹp lại để không chạy ra ngoài danh sách
     start = max(0, min(mid - k // 2, len(order) - k))
     picks = {
         "worst": order[:k],
@@ -206,7 +219,8 @@ def analyze(
         writer.writeheader()
         writer.writerows({k_: r[k_] for k_ in fields} for r in picks["worst"])
 
-    # 4. Kiểu lỗi chính: tô thừa (FP nhiều) hay bỏ sót (FN nhiều).
+    # bước 4: xem lỗi chủ yếu là tô thừa hay bỏ sót.
+    # precision < recall nghĩa là FP nhiều hơn FN (tô thừa), ngược lại là bỏ sót
     over = int(np.sum(prec < rec))
     under = int(np.sum(rec < prec))
     return {
@@ -220,6 +234,7 @@ def analyze(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Chạy từ dòng lệnh: phân tích rồi in kết quả chính ra màn hình."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--metrics", type=Path, required=True,
                         help="CSV theo ảnh từ evaluate.py")

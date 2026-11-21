@@ -1,8 +1,8 @@
 """Tổng hợp bảng và hình kết quả cho báo cáo (YE-4).
 
-Mọi số liệu được tính lại từ các file log do ``evaluate.py`` (CSV theo ảnh),
-``crop_robustness.py`` và ``detect_metrics`` (JSON) ghi ra, nên có nguồn truy vết.
-Không nhập tay số vào bảng.
+Mọi số liệu đều được tính lại từ các file log do ``evaluate.py`` (CSV theo ảnh),
+``crop_robustness.py`` và ``detect_metrics`` (JSON) ghi ra, nên lúc cần có thể truy ngược
+số trong bảng về file gốc. Không nhập tay số nào vào bảng.
 
 Ví dụ::
 
@@ -27,7 +27,7 @@ _METRICS = ("dice", "iou", "precision", "recall")
 
 
 def load_per_image(path: Path) -> dict[str, np.ndarray]:
-    """Đọc CSV của evaluate.py thành các mảng cột."""
+    """Đọc CSV do evaluate.py tạo ra, trả về dict {tên cột: mảng giá trị}."""
     with path.open(newline="", encoding="utf-8-sig") as file:
         rows = list(csv.DictReader(file))
     if not rows:
@@ -36,13 +36,14 @@ def load_per_image(path: Path) -> dict[str, np.ndarray]:
     missing = [c for c in needed if c not in rows[0]]
     if missing:
         raise ValueError(f"{path} thiếu cột {missing}; đây có phải CSV của evaluate.py không?")
+    # image_id giữ dạng chuỗi, các cột còn lại là số
     data = {c: np.array([r[c] for r in rows], dtype=object if c == "image_id" else np.float64)
             for c in needed}
     return data
 
 
 def macro_stats(data: dict[str, np.ndarray]) -> dict[str, float]:
-    """Số chính: thống kê trên metric từng ảnh."""
+    """Số liệu chính của báo cáo: mean, std, median của từng metric tính trên các ảnh."""
     out: dict[str, float] = {"n": float(len(data["dice"]))}
     for name in _METRICS:
         values = data[name]
@@ -53,16 +54,20 @@ def macro_stats(data: dict[str, np.ndarray]) -> dict[str, float]:
 
 
 def micro_stats(data: dict[str, np.ndarray]) -> dict[str, float]:
-    """Số bổ sung: gộp TP/FP/FN toàn bộ pixel.
+    """Số liệu bổ sung: gộp TP/FP/FN của mọi pixel trong cả tập rồi mới tính metric.
 
-    TP của từng ảnh suy ra từ Dice: ``TP = Dice * (area_gt + area_pred) / 2``. Công thức
-    đúng với mọi ảnh (cả khi mask rỗng thì TP = 0), nên không cần đọc lại mask.
+    CSV không lưu sẵn TP, nên suy ra từ Dice của từng ảnh: ``TP = Dice * (area_gt + area_pred) / 2``.
+    Công thức này đúng với mọi ảnh (mask rỗng thì Dice nhân với tổng diện tích bằng 0 nên TP = 0),
+    vì vậy không cần đọc lại mask.
     """
     area_gt, area_pred = data["area_gt"], data["area_pred"]
+    # làm tròn vì Dice trong CSV là số thực nên TP suy ra có thể lệch một chút
     tp = np.rint(data["dice"] * (area_gt + area_pred) / 2.0)
     tp_sum, gt_sum, pred_sum = tp.sum(), area_gt.sum(), area_pred.sum()
     fp, fn = pred_sum - tp_sum, gt_sum - tp_sum
     dice_den, iou_den = 2 * tp_sum + fp + fn, tp_sum + fp + fn
+    # mẫu số bằng 0 nghĩa là cả tập không có pixel dương nào ở cả hai mask,
+    # quy ước metric bằng 1 (giống seg_metrics.py)
     return {
         "dice": 2 * tp_sum / dice_den if dice_den else 1.0,
         "iou": tp_sum / iou_den if iou_den else 1.0,
@@ -72,20 +77,24 @@ def micro_stats(data: dict[str, np.ndarray]) -> dict[str, float]:
 
 
 def compare_runs(runs: dict[str, Path]) -> list[dict[str, float | str]]:
+    """Với mỗi run (ví dụ BCE, Dice, BCE+Dice) tính macro và micro, mỗi run thành một dòng."""
     rows = []
     for name, path in runs.items():
         data = load_per_image(path)
         macro, micro = macro_stats(data), micro_stats(data)
+        # ghi kèm đường dẫn file nguồn để biết số lấy từ đâu
         rows.append({"run": name, "source": str(path), **macro,
                      **{f"micro_{k}": v for k, v in micro.items()}})
     return rows
 
 
 def _fmt(value: float, digits: int = 4) -> str:
+    """Làm tròn số thực thành chuỗi với số chữ số thập phân cho trước."""
     return f"{value:.{digits}f}"
 
 
 def segmentation_markdown(rows: Sequence[dict], target: float | None) -> str:
+    """Dựng bảng markdown so sánh các run segmentation, kèm nhận xét đạt/chưa đạt mục tiêu Dice."""
     head = ("| Run | N | Dice (mean ± std) | Dice median | IoU (mean ± std) | "
             "Pixel P | Pixel R | Dice micro |")
     lines = [head, "|---|---:|---:|---:|---:|---:|---:|---:|"]
@@ -98,6 +107,7 @@ def segmentation_markdown(rows: Sequence[dict], target: float | None) -> str:
         )
     text = "\n".join(lines)
     if target is not None:
+        # so run có Dice trung bình cao nhất với mục tiêu
         best = max(rows, key=lambda r: r["dice_mean"])
         verdict = "đạt" if best["dice_mean"] >= target else "chưa đạt"
         text += (f"\n\nMục tiêu thử nghiệm Dice ≥ {target}: run cao nhất ({best['run']}) "
@@ -107,20 +117,24 @@ def segmentation_markdown(rows: Sequence[dict], target: float | None) -> str:
 
 
 def load_detection_results(specs: Sequence[str]) -> dict[str, dict]:
-    """Đọc kết quả detection từ nhiều file. Mỗi spec là ``PATH`` hoặc ``TEN=PATH[@ngưỡng]``.
+    """Đọc kết quả detection từ nhiều file. Mỗi spec có dạng ``PATH`` hoặc ``TEN=PATH[@ngưỡng]``.
 
-    Hai định dạng đều được nhận:
-    - của Uyên (``detect_metrics --out``): một detector mỗi file, khóa ``all/small/medium/large``;
-      ngưỡng lấy từ khóa ``score_thr`` nếu có, hoặc ``@ngưỡng`` trong spec;
-    - dạng gộp: ``{ten_detector: {score_thr, all, small, ...}}``.
+    Nhận hai kiểu file JSON:
+    - kiểu của Uyên (``detect_metrics --out``): mỗi file một detector, có các khóa
+      ``all/small/medium/large``. Ngưỡng score lấy từ khóa ``score_thr`` nếu có,
+      nếu không thì lấy từ phần ``@ngưỡng`` trong spec;
+    - kiểu đã gộp sẵn: ``{ten_detector: {score_thr, all, small, ...}}``.
     """
     merged: dict[str, dict] = {}
     for spec in specs:
         name = None
         thr = None
         text = spec
+        # tách "TEN=" ở đầu (nếu có)
         if "=" in text:
             name, text = text.split("=", 1)
+        # tách "@ngưỡng" ở cuối. Dùng rsplit để đường dẫn có chứa "@" vẫn đúng,
+        # và nếu phần sau "@" không phải số thì coi nó là một phần của đường dẫn
         if "@" in text:
             head, tail = text.rsplit("@", 1)
             try:
@@ -130,6 +144,7 @@ def load_detection_results(specs: Sequence[str]) -> dict[str, dict]:
                 pass
         path = Path(text.strip())
         data = json.loads(path.read_text(encoding="utf-8"))
+        # nhận ra kiểu của Uyên: có khóa "all" là dict chứa "precision"
         if "all" in data and isinstance(data["all"], dict) and "precision" in data["all"]:
             label = (name or data.get("detector") or path.stem).strip()
             value = thr if thr is not None else data.get("score_thr")
@@ -139,6 +154,7 @@ def load_detection_results(specs: Sequence[str]) -> dict[str, dict]:
                     f"{label}={path}@0.5")
             data = {**data, "score_thr": float(value)}
             data.pop("detector", None)
+            # bọc lại thành kiểu gộp {tên: kết quả} để đoạn dưới xử lý chung
             data = {label: data}
         for label, result in data.items():
             if label in merged:
@@ -148,7 +164,7 @@ def load_detection_results(specs: Sequence[str]) -> dict[str, dict]:
 
 
 def detection_markdown(source) -> str:
-    """``source`` là một Path (định dạng gộp cũ) hoặc danh sách spec (xem load_detection_results)."""
+    """Dựng bảng markdown detection. ``source`` là một Path (file gộp kiểu cũ) hoặc danh sách spec (xem load_detection_results)."""
     specs = [str(source)] if isinstance(source, (str, Path)) else list(source)
     results = load_detection_results(specs)
     lines = ["| Detector | Nhóm | GT | TP | FP | FN | P | R | F1 | AP |",
@@ -156,6 +172,7 @@ def detection_markdown(source) -> str:
     for name, result in results.items():
         for group in ("all", "small", "medium", "large"):
             r = result[group]
+            # AP có thể là None (không tính), khi đó in dấu gạch
             ap = "-" if r["ap"] is None else _fmt(r["ap"], 3)
             lines.append(
                 f"| {name} (score ≥ {result['score_thr']:.3g}) | {group} | {r['n_gt']} "
@@ -169,6 +186,7 @@ def detection_markdown(source) -> str:
 
 
 def crop_markdown(path: Path) -> str:
+    """Dựng bảng markdown so sánh các cách cắt từ file crop_summary.csv."""
     with path.open(newline="", encoding="utf-8-sig") as file:
         rows = list(csv.DictReader(file))
     lines = ["| Cách cắt | N | Miss | Box IoU | Dice | Giảm so với GT crop |",
@@ -183,15 +201,17 @@ def crop_markdown(path: Path) -> str:
 
 
 def boxplot(runs: dict[str, Path], path: Path) -> None:
-    """Hộp Dice theo từng run. Dùng backend không cần màn hình."""
+    """Vẽ boxplot Dice từng ảnh cho mỗi run. Dùng backend Agg để chạy được trên máy không có màn hình."""
+    # import trong hàm để máy không cài matplotlib vẫn dùng được các hàm khác của file
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     values = [load_per_image(p)["dice"] for p in runs.values()]
+    # càng nhiều run thì càng rộng cho khỏi chật
     fig, ax = plt.subplots(figsize=(1.6 * len(values) + 2, 4))
-    try:  # matplotlib >= 3.9 đổi tên labels -> tick_labels
+    try:  # từ matplotlib 3.9 tham số labels đổi tên thành tick_labels
         ax.boxplot(values, tick_labels=list(runs), showmeans=True)
     except TypeError:
         ax.boxplot(values, labels=list(runs), showmeans=True)
@@ -206,6 +226,7 @@ def boxplot(runs: dict[str, Path], path: Path) -> None:
 
 
 def _parse_run(text: str) -> tuple[str, Path]:
+    """Tách chuỗi ``TEN=duong_dan.csv`` của tham số --run thành (tên, đường dẫn)."""
     if "=" not in text:
         raise argparse.ArgumentTypeError("dùng dạng TEN=duong_dan.csv")
     name, path = text.split("=", 1)
@@ -213,6 +234,7 @@ def _parse_run(text: str) -> tuple[str, Path]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Chạy từ dòng lệnh: dựng các bảng được yêu cầu rồi ghi ra file results_tables.md."""
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--run", action="append", type=_parse_run, default=[],
@@ -233,6 +255,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sections = ["# Bảng kết quả (tự sinh từ log, không nhập tay)\n"]
     args.out_dir.mkdir(parents=True, exist_ok=True)
     try:
+        # mỗi phần (segmentation, detection, crop) chỉ làm khi người dùng truyền tham số tương ứng
         if args.run:
             runs = dict(args.run)
             rows = compare_runs(runs)
