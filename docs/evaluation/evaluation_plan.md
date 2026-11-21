@@ -20,8 +20,8 @@ Hai câu hỏi chính được nhắc lại ở các mục sau:
 
 ### 2.1. Segmentation – CelebAMask-HQ
 
-- **Cách chia:** ngẫu nhiên theo ảnh, **70% train / 15% validation / 15% test**, seed cố định **42**. Ví dụ 1.000 ảnh thì 700 / 150 / 150.
-- **Manifest:** lưu danh sách ảnh của từng tập vào một file. Các lần chạy sau dùng lại đúng file này, không chia lại.
+- **Cách chia (theo Hương, đã chốt):** lấy các ảnh có nhãn da, sắp theo id, `random.Random(42).shuffle`, giữ **6.000 ảnh**, rồi **80% train / 10% validation / 10% test** = 4.800 / 600 / 600 (train = `[:-1200]`, val = `[-1200:-600]`, test = `[-600:]`). Đây là chia tập mà U-Net thật đã được train, nên bắt buộc dùng đúng nó để test không bị rò rỉ. Thay đổi so với bản cũ (70/15/15): chia kiểu đó sẽ trộn ảnh train của Hương vào test.
+- **Manifest:** `huong_split` trong `src/evaluation/huong_protocol.py` tái tạo đúng danh sách này. Cả nhóm (kể cả Tuấn) dùng MỘT chia tập này.
 - **Vai trò từng tập:**
   - Train: để học.
   - Validation: để chọn checkpoint và so sánh các loss.

@@ -112,9 +112,18 @@ def _load_mask(path: Path) -> np.ndarray:
         # Tắt pickle để chỉ nạp dữ liệu mảng, không thực thi dữ liệu object tùy ý.
         mask = np.load(path, allow_pickle=False)
     else:
-        # Chuyển ảnh sang grayscale để có một mặt phẳng mask đơn kênh.
         with Image.open(path) as image:
-            mask = np.asarray(image.convert("L"))
+            if image.mode.startswith("I;16") or image.mode == "I":
+                # PNG 16-bit (thường là bản đồ xác suất lưu 0..65535). convert("L") của
+                # Pillow cắt giá trị về 255 nên mọi pixel thành 255 và Dice sai lặng lẽ.
+                # Quy ước: 16-bit dùng toàn dải 0..65535, đổi về 0..255 bằng chia 257.
+                raw = np.asarray(image).astype(np.float64)
+                mask = np.clip(np.rint(raw / 257.0), 0, 255).astype(np.uint8)
+            elif image.mode == "F":
+                mask = np.asarray(image, dtype=np.float32)  # giữ nguyên xác suất 0..1
+            else:
+                # Chuyển ảnh sang grayscale để có một mặt phẳng mask đơn kênh.
+                mask = np.asarray(image.convert("L"))
     # Metric chỉ nhận một mask 2D; ảnh nhiều kênh thường là đầu vào không đúng định dạng.
     if mask.ndim != 2:
         raise ValueError(f"mask file must contain one 2D mask: {path} has shape {mask.shape}")
