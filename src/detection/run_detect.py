@@ -97,6 +97,7 @@ def create_detector(
         if not isinstance(settings, dict):
             raise ValueError("Mục 'retinaface' trong config phải là mapping.")
         return RetinaFaceDetector(
+            model_name=settings.get("model_name", "resnet50"),
             device=settings.get("device", "auto"),
             conf_thres=settings.get("conf_thres", 0.5),
             nms_thres=settings.get("nms_thres", 0.4),
@@ -111,6 +112,7 @@ def run_detection(
     config_path: str | Path = _DEFAULT_CONFIG,
     split: str | None = None,
     conf_thres: float | None = None,
+    model_name: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Chạy detector cho manifest rồi ghi bbox/score theo image_path."""
     rows = load_manifest(manifest_path, split=split)
@@ -118,6 +120,9 @@ def run_detection(
     if conf_thres is not None and detector_name == "retinaface":
         # Tính AP cần giữ gần hết box nên chạy với conf_thres thấp (0.01)
         config.setdefault("retinaface", {})["conf_thres"] = conf_thres
+    if model_name is not None and detector_name == "retinaface":
+        # Pipeline của Hương dùng mobile0.25; đo cả hai backbone để biết kết quả có đại diện không
+        config.setdefault("retinaface", {})["model_name"] = model_name
     detector = create_detector(detector_name, config)
     predictions: dict[str, list[dict[str, Any]]] = {}
 
@@ -177,6 +182,12 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Ghi đè conf_thres của RetinaFace (tính AP dùng 0.01).",
     )
+    parser.add_argument(
+        "--model-name",
+        default=None,
+        choices=("resnet50", "mobile0.25"),
+        help="Backbone RetinaFace (mặc định theo config, hiện là resnet50).",
+    )
     args = parser.parse_args(argv)
     predictions = run_detection(
         detector_name=args.detector,
@@ -185,6 +196,7 @@ def main(argv: list[str] | None = None) -> None:
         config_path=args.config,
         split=args.split,
         conf_thres=args.conf_thres,
+        model_name=args.model_name,
     )
     print(
         f"Đã xử lý {len(predictions)} ảnh bằng {args.detector}; "

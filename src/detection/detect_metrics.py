@@ -187,8 +187,12 @@ def main():
         print("Lưu ý: AP của Haar chỉ để tham khảo, không so trực tiếp với AP của RetinaFace.")
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
-            json.dump({k: {x: y for x, y in v.items() if x != "_curve"} for k, v in result.items()},
-                      f, indent=2)
+            out = {k: {x: y for x, y in v.items() if x != "_curve"} for k, v in result.items()}
+            # ghi kèm ngưỡng/detector để bảng báo cáo không phải đoán lại
+            out["score_thr"] = thr
+            if a.detector:
+                out["detector"] = a.detector
+            json.dump(out, f, indent=2)
 
 
 if __name__ == "__main__":
