@@ -98,7 +98,13 @@ Cách đọc:
 
 Sáu ảnh tệ nhất: `13720`, `19925`, `10890`, `09239`, `27065`, `20437`. Ảnh minh họa nằm ở `results/examples_worst.png` (mỗi hàng gồm ảnh gốc, GT, dự đoán, và ảnh lỗi: TP xanh lá, FP đỏ, FN xanh dương).
 
-Nguyên nhân: `[điền sau khi xem examples_worst.png, ví dụ do tóc, kính, che khuất hay dùng elip dự phòng]`
+Nguyên nhân (nhìn 6 ảnh trong `examples_worst.png`):
+
+- **Có thêm một mảng tô thừa không thuộc mặt chính (13720, 10890, 20437).** Dự đoán có thêm một khối tròn đỏ trên tóc hoặc ở góc ảnh. Hình dạng tròn đều cho thấy đây có thể là elip dự phòng của pipeline cho một khuôn mặt thứ hai do detector bắt nhầm. Điều này khớp với việc trung bình pipeline thấy 1.33 mặt mỗi ảnh và `fallback_rate` khác 0 trong `summary.json`, nhưng chưa kiểm chứng trực tiếp bằng cách đọc log từng ảnh.
+- **Tóc phủ lên một nửa mặt (09239, 27065).** GT chỉ gồm phần mặt nhìn thấy (hình lưỡi liềm), còn mô hình tô cả vùng da lộ qua tóc nên có mảng FP đỏ bên phía tóc phủ.
+- **Vật che khuất (19925).** Hàng rào dây thép chắn trước mặt, mô hình bỏ sót phần trán và hai bên má (FN xanh dương).
+
+Cả 6 ảnh vẫn có Dice từ 0.77 đến 0.86, nên đây là các ca khó chứ không phải lỗi hỏng hoàn toàn.
 
 Chi tiết Dice theo điều kiện ảnh (độ sáng, độ nét, tương phản, tỉ lệ mặt) nằm ở `results/error_by_condition.csv`.
 
