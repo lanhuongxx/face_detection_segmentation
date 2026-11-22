@@ -1,3 +1,5 @@
+"""Test phần đọc mask, ghép cặp và ghi CSV của evaluate.py (cả CLI lẫn hàm bên trong)."""
+
 import csv
 
 import numpy as np
@@ -8,7 +10,8 @@ from src.evaluation.evaluate import _directory_pairs, evaluate_pairs, main
 
 
 def test_directory_cli_writes_per_image_metrics(tmp_path, capsys):
-    # Prediction và GT có cùng tên nhưng khác extension vẫn phải ghép được.
+    """Chạy CLI với hai thư mục mask, kiểm tra CSV theo ảnh và phần thống kê in ra màn hình."""
+    # dự đoán là .png còn GT là .tif nhưng cùng tên "face", vẫn phải ghép được với nhau
     pred_dir = tmp_path / "pred"
     gt_dir = tmp_path / "gt"
     pred_dir.mkdir()
@@ -21,7 +24,7 @@ def test_directory_cli_writes_per_image_metrics(tmp_path, capsys):
     )
     output = tmp_path / "out" / "metrics.csv"
 
-    # Gọi main trực tiếp để kiểm tra cùng parser và luồng ghi file của CLI.
+    # gọi thẳng main để test đúng parser và đúng luồng ghi file của CLI
     assert main(
         [
             "--pred_dir", str(pred_dir),
@@ -32,7 +35,8 @@ def test_directory_cli_writes_per_image_metrics(tmp_path, capsys):
 
     with output.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
-    # Hai pixel dự đoán, một pixel đúng: Dice=2/3, IoU=1/2.
+    # dự đoán 2 pixel dương, trong đó đúng 1 pixel (GT chỉ có 1 pixel dương):
+    # TP = 1, FP = 1, FN = 0 nên Dice = 2/3, IoU = 1/2, precision = 1/2, recall = 1
     assert rows == [
         {
             "image_id": "face",
@@ -45,13 +49,13 @@ def test_directory_cli_writes_per_image_metrics(tmp_path, capsys):
         }
     ]
     summary = capsys.readouterr().out
-    # CLI cần in thống kê macro theo ảnh và metric micro toàn tập.
+    # CLI phải in cả thống kê theo ảnh (macro) lẫn metric gộp toàn tập (micro)
     assert "dice: mean=" in summary
     assert "Micro: dice=" in summary
 
 
 def test_directory_pairing_reports_missing_masks(tmp_path):
-    # Một prediction không có GT phải báo lỗi thay vì lặng lẽ bỏ qua.
+    """Có dự đoán mà không có GT tương ứng thì phải báo lỗi, không được lặng lẽ bỏ qua."""
     pred_dir = tmp_path / "pred"
     gt_dir = tmp_path / "gt"
     pred_dir.mkdir()
@@ -63,7 +67,7 @@ def test_directory_pairing_reports_missing_masks(tmp_path):
 
 
 def test_manifest_cli_resolves_paths_relative_to_manifest(tmp_path):
-    # Đường dẫn tương đối trong manifest được tính từ thư mục chứa file CSV.
+    """Đường dẫn tương đối trong manifest phải được tính từ thư mục chứa file CSV."""
     pred_path = tmp_path / "pred.png"
     gt_path = tmp_path / "gt.png"
     Image.fromarray(np.array([[255, 0]], dtype=np.uint8)).save(pred_path)
@@ -81,13 +85,13 @@ def test_manifest_cli_resolves_paths_relative_to_manifest(tmp_path):
 
     with output.open(newline="", encoding="utf-8") as file:
         rows = list(csv.DictReader(file))
-    # Hai mask không giao nhau nên Dice bằng 0.
+    # hai mask không chung pixel nào nên Dice = 0
     assert rows[0]["image_id"] == "sample"
     assert rows[0]["dice"] == "0.0"
 
 
 def test_evaluate_pairs_shape_error_includes_image_id(tmp_path):
-    # Hai mask lệch shape phải báo lỗi kèm ID để xác định ảnh gây lỗi.
+    """Hai mask khác shape thì lỗi phải kèm image_id để biết ảnh nào bị."""
     pred_path = tmp_path / "pred.npy"
     gt_path = tmp_path / "gt.npy"
     np.save(pred_path, np.zeros((2, 3), dtype=np.uint8))

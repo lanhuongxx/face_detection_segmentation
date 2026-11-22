@@ -158,11 +158,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out_dir", type=Path, default=Path("outputs/crop"))
     args = parser.parse_args(argv)
 
-    
+    # import ở đây để các hàm bên trên dùng được mà không cần code pipeline của Hương
     from .pipeline_adapter import PipelineEngine
 
     image_dir = args.data_root / "CelebA-HQ-img"
     mask_dir = args.data_root / "CelebAMask-HQ-mask-anno"
+    # chia tập đúng như Hương để val/test ở đây trùng với val/test lúc train
     ids = huong_split(ids_with_skin(mask_dir))[args.split]
     if args.limit:
         ids = ids[: args.limit]
