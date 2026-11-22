@@ -1,0 +1,24 @@
+{
+  "split": "test",
+  "margin": 0.25,
+  "orig_clean": {
+    "macro_dice": 0.9754940846901783,
+    "macro_iou": 0.95316165220198,
+    "macro_precision": 0.974744783184276,
+    "macro_recall": 0.9774627421622855,
+    "n": 600,
+    "detect_rate": 1.0,
+    "fallback_rate": 0.008333333333333333,
+    "n_faces_mean": 1.3333333333333333
+  },
+  "crop256_clean": {
+    "macro_dice": 0.9768967667897767,
+    "macro_iou": 0.9556937307505704,
+    "macro_precision": 0.9757777253395523,
+    "macro_recall": 0.9790415913186356,
+    "n": 600,
+    "detect_rate": 1.0,
+    "fallback_rate": 0.008333333333333333,
+    "n_faces_mean": 1.3333333333333333
+  }
+}
