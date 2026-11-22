@@ -1,4 +1,7 @@
-"""Baseline phát hiện mặt bằng Haar Cascade của OpenCV."""
+"""Baseline phát hiện mặt bằng Haar Cascade của OpenCV.
+
+Dùng làm mốc để so với RetinaFace: Haar nhẹ và nhanh nhưng chỉ bắt tốt mặt nhìn thẳng.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +14,10 @@ import numpy as np
 
 
 class HaarFaceDetector:
-    """Phát hiện mặt frontal; score chỉ dùng xếp hạng, không phải xác suất."""
+    """Phát hiện mặt nhìn thẳng (frontal) bằng Haar Cascade.
+
+    Score trả về chỉ dùng để xếp hạng các box, không phải xác suất.
+    """
 
     _CASCADE_FILENAME = "haarcascade_frontalface_default.xml"
 
@@ -23,9 +29,11 @@ class HaarFaceDetector:
         equalize_hist: bool = False,
         cascade_path: str | Path | None = None,
     ) -> None:
-        """Tạo classifier và kiểm tra tham số trước khi detect."""
+        """Kiểm tra tham số rồi nạp file cascade. Sai tham số thì báo lỗi ngay, chưa cần có ảnh."""
+        # scale_factor là hệ số thu nhỏ ảnh sau mỗi vòng quét nên phải > 1
         if not math.isfinite(scale_factor) or scale_factor <= 1.0:
             raise ValueError("scale_factor phải là số hữu hạn lớn hơn 1.")
+        # isinstance(x, bool) cần kiểm tra riêng vì trong Python True/False cũng là số nguyên
         if (
             isinstance(min_neighbors, bool)
             or not isinstance(min_neighbors, int)
@@ -40,6 +48,7 @@ class HaarFaceDetector:
         if not isinstance(equalize_hist, bool):
             raise ValueError("equalize_hist phải là bool.")
 
+        # không truyền đường dẫn thì dùng file cascade đi kèm trong gói OpenCV
         if cascade_path is None:
             cascade_path = (
                 Path(cv2.data.haarcascades) / self._CASCADE_FILENAME
@@ -50,6 +59,8 @@ class HaarFaceDetector:
         self.equalize_hist = equalize_hist
         self.cascade_path = Path(cascade_path)
         self._classifier = cv2.CascadeClassifier(str(self.cascade_path))
+        # CascadeClassifier không báo lỗi khi sai đường dẫn, chỉ trả về đối tượng rỗng,
+        # nên phải tự kiểm tra
         if self._classifier.empty():
             raise FileNotFoundError(
                 f"Không tải được Haar cascade: {self.cascade_path}"
@@ -57,7 +68,7 @@ class HaarFaceDetector:
 
     @staticmethod
     def _to_gray(image_bgr: np.ndarray) -> np.ndarray:
-        """Kiểm tra ảnh uint8 và chuyển ảnh xám/BGR/BGRA sang grayscale."""
+        """Kiểm tra ảnh là uint8 rồi đổi ảnh xám, BGR hoặc BGRA về ảnh xám một kênh."""
         if not isinstance(image_bgr, np.ndarray):
             raise ValueError("Ảnh đầu vào phải là numpy.ndarray.")
         if image_bgr.dtype != np.uint8:
@@ -78,24 +89,32 @@ class HaarFaceDetector:
 
         if gray.shape[0] == 0 or gray.shape[1] == 0:
             raise ValueError("Ảnh đầu vào không được rỗng.")
+        # OpenCV cần mảng liền khối trong bộ nhớ, lát cắt như image[:, :, 0] thì chưa chắc
         return np.ascontiguousarray(gray)
 
     @staticmethod
     def _weight_to_score(level_weight: float) -> float:
-        """Chuẩn hóa levelWeight bằng sigmoid ổn định về [0, 1]."""
+        """Đổi levelWeight của cascade (số thực bất kỳ) về khoảng [0, 1] bằng sigmoid."""
         if not math.isfinite(level_weight):
             raise RuntimeError("Haar cascade trả levelWeight không hữu hạn.")
+        # hai nhánh để math.exp không bị tràn số khi level_weight là số âm rất lớn
         if level_weight >= 0:
             return 1.0 / (1.0 + math.exp(-level_weight))
         exp_weight = math.exp(level_weight)
         return exp_weight / (1.0 + exp_weight)
 
     def detect(self, image_bgr: np.ndarray) -> list[dict[str, Any]]:
-        """Trả bbox pixel trong ảnh gốc, score xếp hạng và landmarks=None."""
+        """Phát hiện mặt, trả danh sách {bbox, score, landmarks} sắp theo score giảm dần.
+
+        bbox là pixel [x1, y1, x2, y2] trong ảnh gốc. Haar không có landmarks nên luôn là None.
+        """
         gray = self._to_gray(image_bgr)
+        # cân bằng histogram giúp ảnh thiếu sáng hoặc tương phản thấp, tùy chọn trong config
         if self.equalize_hist:
             gray = cv2.equalizeHist(gray)
 
+        # detectMultiScale3 với outputRejectLevels=True để lấy thêm levelWeights,
+        # từ đó tính được score cho từng box (detectMultiScale thường không có)
         rectangles, _, level_weights = (
             self._classifier.detectMultiScale3(
                 gray,
@@ -119,6 +138,7 @@ class HaarFaceDetector:
             )
 
         detections: list[dict[str, Any]] = []
+        # OpenCV trả (x, y, rộng, cao), đổi sang (x1, y1, x2, y2) cho thống nhất với RetinaFace
         for (x, y, width, height), weight in zip(rectangles, weights):
             detections.append(
                 {

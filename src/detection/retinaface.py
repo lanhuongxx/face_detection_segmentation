@@ -1,4 +1,4 @@
-"""Inference RetinaFace pretrained và chuẩn hóa kết quả về hợp đồng chung."""
+"""Chạy RetinaFace pretrained và đưa kết quả về cùng một dạng với Haar (bbox, score, landmarks)."""
 
 from __future__ import annotations
 
@@ -15,10 +15,12 @@ import numpy as np
 def bbox_to_int(
     bbox: Sequence[float], image_shape: Sequence[int]
 ) -> tuple[int, int, int, int] | None:
-    """Đổi bbox float sang chỉ số crop NumPy, trả None nếu vùng crop rỗng."""
+    """Đổi bbox số thực sang chỉ số để cắt mảng NumPy. Trả None nếu vùng cắt rỗng."""
     height, width = image_shape[:2]
     x1, y1, x2, y2 = bbox
 
+    # làm tròn ra ngoài (floor cho góc trên trái, ceil cho góc dưới phải) để không cắt hụt mặt,
+    # rồi kẹp vào trong ảnh
     left = min(max(math.floor(x1), 0), width)
     top = min(max(math.floor(y1), 0), height)
     right = min(max(math.ceil(x2), 0), width)
@@ -46,7 +48,10 @@ class RetinaFaceDetector:
         nms_thres: float = 0.4,
         max_size: int | None = None,
     ) -> None:
-        """Tải model pretrained và kiểm tra cấu hình inference."""
+        """Kiểm tra tham số rồi tải model pretrained.
+
+        conf_thres là ngưỡng score để giữ box, nms_thres là ngưỡng IoU để loại các box chồng nhau.
+        """
         # Kiểm tra cấu hình sớm để lỗi tham số không bị nhầm với lỗi tải model.
         if model_name not in self._SUPPORTED_MODELS:
             raise ValueError(
@@ -89,7 +94,7 @@ class RetinaFaceDetector:
 
     @staticmethod
     def _to_bgr(image: np.ndarray) -> np.ndarray:
-        """Chuẩn hóa ảnh xám/BGR/BGRA thành ảnh BGR uint8."""
+        """Đưa ảnh xám, BGR hoặc BGRA về ảnh BGR 3 kênh kiểu uint8."""
         if not isinstance(image, np.ndarray):
             raise ValueError("Ảnh đầu vào phải là numpy.ndarray, không được là None.")
         if image.size == 0:
@@ -105,6 +110,7 @@ class RetinaFaceDetector:
         if image.dtype != np.uint8:
             values = image.astype(np.float32, copy=False)
             if image.dtype == np.uint16:
+                # ảnh 16-bit dùng dải 0..65535 nên chia 257 để về 0..255
                 values = values / 257.0
             elif values.size and values.min() >= 0.0 and values.max() <= 1.0:
                 values = values * 255.0
@@ -125,7 +131,7 @@ class RetinaFaceDetector:
         return np.ascontiguousarray(image)
 
     def _prepare_image(self, image: np.ndarray) -> tuple[np.ndarray, float, float]:
-        """Giới hạn kích thước ảnh và trả lại hệ số scale từng trục."""
+        """Đổi ảnh về BGR, thu nhỏ hoặc phóng to nếu cần, trả về ảnh và hệ số scale của từng trục."""
         image = self._to_bgr(image)
         height, width = image.shape[:2]
         # Ảnh lớn được thu nhỏ; ảnh quá nhỏ được phóng lên để backbone xử lý ổn định.
@@ -135,6 +141,7 @@ class RetinaFaceDetector:
         if largest_side > max_size:
             scale = max_size / largest_side
         elif min(height, width) < self._MIN_INPUT_SIDE:
+            # phóng lên cho cạnh ngắn đạt mức tối thiểu, nhưng cạnh dài không được vượt max_size
             scale = min(
                 self._MIN_INPUT_SIDE / min(height, width),
                 max_size / largest_side,
@@ -157,7 +164,10 @@ class RetinaFaceDetector:
         return image, scale_x, scale_y
 
     def detect(self, image_bgr: np.ndarray) -> list[dict[str, Any]]:
-        """Trả các mặt theo bbox, score và 5 landmarks ở tọa độ ảnh gốc."""
+        """Phát hiện mặt, trả danh sách {bbox, score, landmarks} theo tọa độ ảnh gốc, score giảm dần.
+
+        landmarks gồm 5 điểm: hai mắt, mũi, hai khóe miệng.
+        """
         image, scale_x, scale_y = self._prepare_image(image_bgr)
         # Inference mode tắt gradient; ngoài tiết kiệm bộ nhớ còn tương thích với
         # FaceXLib đang chuyển tensor kết quả trực tiếp sang NumPy.
@@ -190,6 +200,7 @@ class RetinaFaceDetector:
             x2 = float(np.clip(x2 / scale_x, 0, width))
             y1 = float(np.clip(y1 / scale_y, 0, height))
             y2 = float(np.clip(y2 / scale_y, 0, height))
+            # box sau khi kẹp vào ảnh mà rỗng thì bỏ luôn
             if bbox_to_int((x1, y1, x2, y2), image_bgr.shape) is None:
                 continue
 
@@ -210,7 +221,7 @@ class RetinaFaceDetector:
     def detect_batch(
         self, images: list[np.ndarray]
     ) -> list[list[dict[str, Any]]]:
-        """Phát hiện từng ảnh lần lượt; đầu ra giữ cùng thứ tự với danh sách đầu vào."""
+        """Phát hiện từng ảnh lần lượt; kết quả giữ cùng thứ tự với danh sách ảnh đầu vào."""
         # FaceXLib không cung cấp batch API thuận tiện cho ảnh có kích thước khác nhau.
         return [self.detect(image) for image in images]
 
@@ -218,12 +229,13 @@ class RetinaFaceDetector:
     def draw(
         image: np.ndarray, faces: list[dict[str, Any]]
     ) -> np.ndarray:
-        """Vẽ bbox, confidence và landmarks lên bản sao ảnh BGR."""
+        """Vẽ bbox, điểm confidence và landmarks lên một bản sao của ảnh (BGR)."""
         # Vẽ trên bản sao để không làm thay đổi ảnh gốc đang được pipeline sử dụng.
         canvas = RetinaFaceDetector._to_bgr(image).copy()
         for face in faces:
             x1, y1, x2, y2 = (int(round(value)) for value in face["bbox"])
             cv2.rectangle(canvas, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # ghi score ngay phía trên góc trái của box, max(0, ...) để chữ không bị lọt ra ngoài ảnh
             cv2.putText(
                 canvas,
                 f"{face['score']:.2f}",
@@ -242,7 +254,7 @@ class RetinaFaceDetector:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Chạy demo đọc ảnh, detect và lưu ảnh debug."""
+    """Chạy demo: đọc một ảnh, phát hiện mặt rồi lưu ảnh đã vẽ box để xem thử."""
     # Giúp argparse và thông báo lỗi tiếng Việt in được trên terminal Windows cũ.
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -260,6 +272,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     image_path = Path(args.image)
+    # IMREAD_UNCHANGED giữ nguyên số kênh và độ sâu bit của ảnh, việc chuẩn hóa để _to_bgr lo
     image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
     if image is None:
         # Phân biệt file không tồn tại với file có tồn tại nhưng OpenCV không giải mã được.

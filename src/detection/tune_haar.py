@@ -1,8 +1,9 @@
-"""Tune Haar trên 500 ảnh WIDER train cố định rồi khóa cấu hình.
+"""Tune Haar trên 500 ảnh WIDER train cố định rồi khóa cấu hình lại.
 
-Thử lưới tham số, mỗi cấu hình chọn ngưỡng score cho F1 cao nhất, lấy cấu hình
-có F1 cao nhất. Kết quả ghi vào configs/detection_locked.yaml; phải làm bước này
-TRƯỚC khi chạy WIDER val và không sửa tay sau đó.
+Thử một lưới tham số. Với mỗi cấu hình, chọn ngưỡng score cho F1 cao nhất, sau đó lấy cấu hình
+có F1 cao nhất trong cả lưới. Kết quả ghi vào configs/detection_locked.yaml. Bước này phải làm
+TRƯỚC khi chạy WIDER val và không được sửa tay file đó sau khi chạy, để Haar không được chỉnh
+tham số theo tập test.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ GRID = {
 
 
 def tune(images, gt, grid=GRID):
-    """images: {id: ảnh xám}. Trả danh sách kết quả, mỗi cấu hình một dòng."""
+    """Thử từng cấu hình trong lưới. images: {id: ảnh xám}. Trả danh sách kết quả, mỗi cấu hình một dòng."""
     results = []
     # itertools.product thử hết mọi tổ hợp trong lưới
     for sf, mn, ms, eq in itertools.product(*grid.values()):
@@ -48,6 +49,7 @@ def tune(images, gt, grid=GRID):
 
 
 def main():
+    """Chạy từ dòng lệnh: tune trên manifest, ghi config đã khóa và file kết quả đầy đủ."""
     p = argparse.ArgumentParser(description="Tune Haar trên tập 500 ảnh train.")
     p.add_argument("--manifest", required=True, help="manifest_wider_tune500.csv")
     p.add_argument("--gt", required=True, help="wider_face_train_bbx_gt.txt")
@@ -68,7 +70,7 @@ def main():
     config = load_config(a.config)
     config["haar"] = {k: best[k] for k in ("scale_factor", "min_neighbors", "min_size", "equalize_hist")}
     config["haar"]["score_thr"] = round(best["score_thr"], 6)
-    config.setdefault("retinaface", {})["score_thr"] = 0.5  # RetinaFace cố định 0.5
+    config.setdefault("retinaface", {})["score_thr"] = 0.5  # RetinaFace cố định 0.5, không tune
     with open(a.locked_config, "w", encoding="utf-8") as f:
         f.write("# Cấu hình đã khóa bởi tune_haar.py, không sửa tay sau khi chạy WIDER val\n")
         yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)

@@ -1,4 +1,7 @@
-"""Chạy RetinaFace hoặc Haar trên cùng manifest và ghi predictions JSON."""
+"""Chạy RetinaFace hoặc Haar trên cùng một manifest rồi ghi predictions ra file JSON.
+
+Hai detector dùng chung manifest, config và cách ghi kết quả, nên so sánh được trực tiếp với nhau.
+"""
 
 from __future__ import annotations
 
@@ -16,13 +19,14 @@ from src.detection.haar_baseline import HaarFaceDetector
 from src.detection.retinaface import RetinaFaceDetector
 
 
+# đường dẫn mặc định tới configs/detection.yaml, tính từ vị trí file này (đi lên hai cấp là thư mục gốc repo)
 _DEFAULT_CONFIG = (
     Path(__file__).resolve().parents[2] / "configs" / "detection.yaml"
 )
 
 
 def load_config(config_path: str | Path) -> dict[str, Any]:
-    """Đọc YAML cấu hình và báo lỗi nếu nội dung không phải mapping."""
+    """Đọc file YAML cấu hình, báo lỗi nếu nội dung không phải dạng mapping (khóa: giá trị)."""
     path = Path(config_path)
     with path.open("r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
@@ -34,7 +38,11 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
 def load_manifest(
     manifest_path: str | Path, split: str | None = None
 ) -> list[tuple[str, Path]]:
-    """Đọc các cột image_path, split; path tương đối tính từ thư mục CSV."""
+    """Đọc manifest CSV (cột image_path, split), trả danh sách (image_path, đường dẫn thật).
+
+    Đường dẫn tương đối được tính từ thư mục chứa file CSV. Nếu truyền split thì chỉ lấy
+    những dòng thuộc split đó.
+    """
     path = Path(manifest_path)
     rows: list[tuple[str, Path]] = []
     seen_ids: set[str] = set()
@@ -49,6 +57,7 @@ def load_manifest(
                 "Manifest thiếu cột bắt buộc: " + ", ".join(sorted(missing))
             )
 
+        # dòng 1 là header nên dòng dữ liệu đầu tiên là dòng 2 (để báo lỗi đúng dòng)
         for line_number, row in enumerate(reader, start=2):
             image_id = (row.get(lookup.get("image_path", "")) or "").strip()
             row_split = (row.get(lookup.get("split", "")) or "").strip()
@@ -56,6 +65,7 @@ def load_manifest(
                 raise ValueError(
                     f"Manifest có image_path/split rỗng tại dòng {line_number}."
                 )
+            # lọc theo split ở đây, nhưng vẫn kiểm tra rỗng ở trên cho mọi dòng
             if split is not None and row_split != split:
                 continue
             if image_id in seen_ids:
@@ -78,7 +88,7 @@ def load_manifest(
 def create_detector(
     detector_name: str, config: dict[str, Any]
 ) -> HaarFaceDetector | RetinaFaceDetector:
-    """Tạo detector theo config chung để hai backend dùng cùng CLI."""
+    """Tạo detector theo tên và config, để hai backend dùng chung một CLI."""
     if detector_name == "haar":
         settings = config.get("haar", {})
         if not isinstance(settings, dict):
@@ -86,6 +96,7 @@ def create_detector(
         min_size = settings.get("min_size", [30, 30])
         if not isinstance(min_size, (list, tuple)) or len(min_size) != 2:
             raise ValueError("haar.min_size phải gồm width và height.")
+        # thiếu tham số nào trong config thì dùng giá trị mặc định của OpenCV/Haar ở đây
         return HaarFaceDetector(
             scale_factor=settings.get("scale_factor", 1.1),
             min_neighbors=settings.get("min_neighbors", 5),
@@ -114,7 +125,7 @@ def run_detection(
     conf_thres: float | None = None,
     model_name: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Chạy detector cho manifest rồi ghi bbox/score theo image_path."""
+    """Chạy detector trên các ảnh của manifest rồi ghi bbox và score theo từng image_path ra JSON."""
     rows = load_manifest(manifest_path, split=split)
     config = load_config(config_path)
     if conf_thres is not None and detector_name == "retinaface":
@@ -127,14 +138,17 @@ def run_detection(
     predictions: dict[str, list[dict[str, Any]]] = {}
 
     for n, (image_id, image_path) in enumerate(rows, start=1):
+        # in tiến độ ra stderr mỗi 100 ảnh để biết chương trình vẫn đang chạy
         if n % 100 == 0:
             print(f"  {n}/{len(rows)} ảnh", file=sys.stderr, flush=True)
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if image is None:
+            # phân biệt file không tồn tại với file có tồn tại nhưng không đọc được
             if not image_path.is_file():
                 raise FileNotFoundError(f"Không tìm thấy ảnh: {image_path}")
             raise ValueError(f"Không giải mã được ảnh: {image_path}")
         faces = detector.detect(image)
+        # chỉ giữ bbox và score vì phần đánh giá detection không cần landmarks
         predictions[image_id] = [
             {"bbox": face["bbox"], "score": float(face["score"])}
             for face in faces
@@ -143,13 +157,15 @@ def run_detection(
     destination = Path(output_path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8") as file:
+        # ensure_ascii=False để đường dẫn có tiếng Việt vẫn đọc được trong file JSON
         json.dump(predictions, file, ensure_ascii=False, indent=2)
         file.write("\n")
     return predictions
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Phân tích tham số CLI và chạy inference trên manifest."""
+    """Đọc tham số dòng lệnh rồi chạy detection trên manifest."""
+    # đổi encoding của stdout/stderr sang UTF-8 để in được tiếng Việt trên terminal Windows cũ
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
