@@ -1,0 +1,9 @@
+numpy
+opencv-python
+Pillow
+PyYAML
+streamlit
+torch
+torchvision
+facexlib
+pytest

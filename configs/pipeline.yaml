@@ -5,7 +5,7 @@ preprocess:
   max_file_mb: 10
 detection:
   model: retinaface_mobile0.25     # hoặc retinaface_resnet50 (nặng hơn, tốt hơn cho mặt nhỏ)
-  conf_threshold: 0.5              # thấp hơn nếu ưu tiên không bỏ sót mặt
+  conf_threshold: 0.4              # thấp hơn nếu ưu tiên không bỏ sót mặt
   max_faces: 200
 crop:
   margin: 0.25

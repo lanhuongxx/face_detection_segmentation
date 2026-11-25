@@ -1,8 +1,4 @@
-"""FaceShield: giao diện Streamlit.
-Chạy:  streamlit run app.py        (từ thư mục gốc project, đã bật môi trường .venv)
-
-Giữ lại từ bản app.py cũ: cache pipeline theo thời điểm sửa file trọng số, Lock khi chạy model,
-nhận diện ảnh mới bằng sha256, bắt lỗi file. Bổ sung: che mặt, thẻ khuôn mặt, tải về, tab camera/video."""
+"""Giao diện Streamlit của FaceShield. Chạy bằng streamlit run app.py."""
 import json
 import tempfile
 from hashlib import sha256
@@ -81,6 +77,13 @@ def run_analysis(key, image, source, image_id=None):
 
 
 # ---------------------------------------------------------------- hiển thị kết quả
+def download_report(key, pipeline, result):
+    stem = Path(result.meta.get("source", {}).get("filename") or "faceshield").stem
+    data = json.dumps(pipeline.report(result), ensure_ascii=False, indent=2)
+    st.download_button("Tải báo cáo (JSON)", data=data, file_name=f"{stem}_report.json",
+                       mime="application/json", key=f"{key}_dl_json")
+
+
 def render_result(key):
     entry = st.session_state.get(key)
     if entry is None:
@@ -88,14 +91,15 @@ def render_result(key):
     result = entry["result"]
     faces = result.faces
     st.divider()
-    if not faces:
-        st.info("Không phát hiện khuôn mặt nào. Thử hạ **Ngưỡng phát hiện** ở thanh bên rồi phân tích lại.")
-        st.image(result.image)
-        return
     try:
         _, (pipeline, _) = load_pipeline()
     except FileNotFoundError as error:
         st.error(str(error))
+        return
+    if not faces:
+        st.info("Không phát hiện khuôn mặt nào. Thử hạ **Ngưỡng phát hiện** ở thanh bên rồi phân tích lại.")
+        st.image(result.image)
+        download_report(key, pipeline, result)
         return
 
     ids = [f.id for f in faces]
@@ -144,8 +148,8 @@ def render_result(key):
                     st.image(face.thumbnail, width=96)
                     w, h = face.size_px
                     st.caption(f"#{face.id} · score {face.score:.2f}")
-                    st.caption(f"{w}×{h} px · {'mask' if face.status == 'ok' else 'elip'}")
-                    st.caption("Danh tính: —")
+                    mask_label = "U-Net" if face.status == "ok" else "Elip dự phòng"
+                    st.caption(f"{w}×{h} px · {mask_label}")
                     if ENABLE_PRIVACY:
                         st.checkbox("Che", key=f"{key}_sel_{face.id}")
         if len(faces) > MAX_CARDS:
@@ -159,16 +163,16 @@ def render_result(key):
     else:
         d1.download_button("Tải ảnh phân vùng (PNG)", data=to_png_bytes(result.overlay_masks),
                            file_name=f"{stem}_masks.png", mime="image/png", key=f"{key}_dl_png")
-    d2.download_button("Tải báo cáo (JSON)", data=json.dumps(pipeline.report(result), ensure_ascii=False, indent=2),
-                       file_name=f"{stem}_report.json", mime="application/json", key=f"{key}_dl_json")
+    with d2:
+        download_report(key, pipeline, result)
 
 
 # ---------------------------------------------------------------- thanh bên: tùy chọn
 st.set_page_config(page_title="FaceShield · Phát hiện và phân vùng khuôn mặt", layout="wide")
 with st.sidebar:
     st.header("Tùy chọn")
-    conf = st.slider("Ngưỡng phát hiện", min_value=0.10, max_value=0.90, value=0.50, step=0.05,
-                     help="Thấp hơn: ít bỏ sót mặt hơn nhưng có thể thêm mặt nhầm (bỏ chọn ở thẻ khuôn mặt).")
+    conf = st.slider("Ngưỡng phát hiện", min_value=0.10, max_value=0.90, value=0.40, step=0.05, #đổi giá trị value từ 0.50 xuống 0.40
+                     help="Hạ ngưỡng có thể phát hiện thêm khuôn mặt và tăng số phát hiện nhầm.")
     if ENABLE_PRIVACY:
         mode_label = st.radio("Kiểu che", list(MODES))
         strength = st.slider("Độ mạnh", min_value=1, max_value=10, value=6)
@@ -180,7 +184,7 @@ with st.sidebar:
         st.caption("Ảnh chỉ xử lý trong phiên làm việc, không được lưu lại.")
 
 st.title("FaceShield · Phát hiện và phân vùng khuôn mặt")
-top_tabs = st.tabs(["Ảnh", "Camera / Video"] + (["So sánh Box vs Mask"] if ENABLE_PRIVACY else []))
+top_tabs = st.tabs(["Ảnh", "Khung hình từ video"] + (["So sánh Box vs Mask"] if ENABLE_PRIVACY else []))
 tab_image, tab_camera = top_tabs[0], top_tabs[1]
 
 # ---------------------------------------------------------------- tab Ảnh
@@ -217,39 +221,49 @@ with tab_image:
                 st.error("Ảnh vượt quá dung lượng cho phép trong cấu hình pipeline.")
         render_result("img")
 
-# ---------------------------------------------------------------- tab Camera / Video
+# ---------------------------------------------------------------- khung hình từ video
 with tab_camera:
-    st.caption("Chọn một khung hình từ video camera rồi phân tích như ảnh tĩnh. "
-               "Xử lý cả video (từng khung hình) chưa có trong bản này.")
-    video = st.file_uploader("Video camera (MP4, MOV, AVI, MKV)", type=VIDEO_TYPES, key="video_upload")
+    st.caption("Chọn một khung hình từ video tải lên để phát hiện và phân vùng khuôn mặt.")
+    video = st.file_uploader("Tải video MP4, MOV, AVI hoặc MKV", type=VIDEO_TYPES, key="video_upload")
     if video is None:
         st.session_state.pop("cam", None)
         st.session_state.pop("video_id", None)
+        st.session_state.pop("video_frame_idx", None)
+        clear_selection("cam")
     else:
-        video_key = f"{video.name}_{video.size}"
-        if st.session_state.get("video_id") != video_key:           # video mới: ghi ra file tạm
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=Path(video.name).suffix)
-            tmp.write(video.getvalue())
-            tmp.close()
+        video_data = video.getbuffer()
+        video_key = (video.name, sha256(video_data).hexdigest())
+        if st.session_state.get("video_id") != video_key:
             st.session_state["video_id"] = video_key
-            st.session_state["video_path"] = tmp.name
             st.session_state.pop("cam", None)
+            st.session_state.pop("video_frame_idx", None)
             clear_selection("cam")
-        path = st.session_state["video_path"]
+
         try:
-            info = video_info(path)
-            total = max(info["total_frames"], 1)
-            st.caption(f"{info['width']}×{info['height']} · {info['fps']:.0f} FPS · "
-                       f"{info['duration_s']:.1f} giây · {info['total_frames']} khung hình")
-            frame_idx = st.slider("Khung hình", 0, total - 1, 0) if total > 1 else 0
-            frame = extract_frame(path, frame_idx)
+            with tempfile.TemporaryDirectory(prefix="faceshield-") as temp_dir:
+                path = Path(temp_dir) / f"video{Path(video.name).suffix.lower()}"
+                path.write_bytes(video_data)
+                info = video_info(str(path))
+                total = max(info["total_frames"], 1)
+                st.caption(f"{info['width']}×{info['height']} · {info['fps']:.0f} FPS · "
+                           f"{info['duration_s']:.1f} giây · {info['total_frames']} khung hình")
+                frame_idx = st.slider("Khung hình", 0, total - 1, 0, key="video_frame_idx") if total > 1 else 0
+                frame = extract_frame(str(path), frame_idx)
+        except (ValueError, OSError) as error:
+            st.error(f"Không thể đọc video: {error}")
+        else:
+            frame_id = (video_key, frame_idx)
+            current = st.session_state.get("cam")
+            if current is not None and current["id"] != frame_id:
+                st.session_state.pop("cam")
+                clear_selection("cam")
+
             st.image(frame, caption=f"Khung hình {frame_idx}")
             if st.button("Phân tích khung hình này", type="primary", key="analyze_frame"):
                 run_analysis("cam", frame, {"type": "video_frame", "filename": video.name, "frame_idx": frame_idx},
-                             f"{video_key}_{frame_idx}")
-        except ValueError as error:
-            st.error(str(error))
-        render_result("cam")
+                             frame_id)
+            render_result("cam")
+
 
 # ---------------------------------------------------------------- tab So sánh
 if ENABLE_PRIVACY:
@@ -258,7 +272,7 @@ if ENABLE_PRIVACY:
         last = st.session_state.get("last")
         entry = st.session_state.get(last) if last else None
         if entry is None or not entry["result"].faces:
-            st.info("Hãy phân tích một ảnh (hoặc khung hình) có khuôn mặt ở tab Ảnh hoặc Camera / Video trước.")
+            st.info("Hãy phân tích một ảnh (hoặc khung hình) có khuôn mặt ở tab Ảnh hoặc Khung hình từ video trước.")
         else:
             result = entry["result"]
             try:
