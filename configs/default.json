@@ -1,0 +1,24 @@
+{
+  "detector_backend": "auto",
+  "segmentor_backend": "auto",
+  "conf_threshold": 0.5,
+  "mask_threshold": 0.5,
+  "crop_margin_ratio": 0.15,
+  "unet_input_size": [256, 256],
+  "unet_checkpoint": null,
+  "privacy": {
+    "mode": "blur",
+    "blur_strength": 35,
+    "feather_radius": 9,
+    "pixel_block_size": 16,
+    "mask_color": [0, 200, 255],
+    "mask_alpha": 0.45,
+    "draw_bbox": false,
+    "draw_labels": true
+  },
+  "video": {
+    "codec": "mp4v",
+    "frame_stride": 1,
+    "fallback_fps": 30.0
+  }
+}

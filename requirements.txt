@@ -1,0 +1,9 @@
+numpy>=1.24.0
+opencv-python>=4.8.0,<5.0.0
+pillow>=10.0.0
+streamlit>=1.32.0
+pytest>=8.0.0
+# Optional DL backends (for RetinaFace / trained U-Net weights):
+# torch>=2.1.0
+# torchvision>=0.16.0
+# retina-face>=0.0.17
