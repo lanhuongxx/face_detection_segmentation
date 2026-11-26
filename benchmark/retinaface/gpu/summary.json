@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-11-24T11:41:25.082652+07:00",
+  "model": "RetinaFaceDetector default resnet50",
+  "device": "cuda",
+  "cuda_available": true,
+  "torch_version": "2.7.1+cu118",
+  "os": "Windows-10-10.0.26200-SP0",
+  "image_count": 98,
+  "repeats_per_image": 1,
+  "successful_inferences": 98,
+  "failed_inferences": 0,
+  "warmup_inferences": 3,
+  "model_load_seconds": 13.669,
+  "latency_mean_ms": 79.182,
+  "latency_p50_ms": 65.487,
+  "latency_p95_ms": 146.086,
+  "latency_min_ms": 29.426,
+  "latency_max_ms": 284.863,
+  "inference_only_fps": 12.629,
+  "peak_gpu_allocated_mb": 835.744,
+  "peak_gpu_reserved_mb": 1410.0,
+  "notes": "Timing measures detector.detect only, excludes image loading and model initialization. FPS from sum of inference times; sequential images. GPU memory is PyTorch-managed, not total device VRAM. CPU has no VRAM measurement."
+}
