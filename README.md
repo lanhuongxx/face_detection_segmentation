@@ -1,4 +1,4 @@
-# Face Detection & Segmentation — Team 5 (Integration Module)
+# Face Detection & Segmentation
 
 Phần tích hợp end-to-end của hệ thống phát hiện, phân vùng và che mờ khuôn mặt theo mask:
 **RetinaFace → Crop → U-Net → Mask Map-back → Privacy Filter / Video / Streamlit Demo**.
